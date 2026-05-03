@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记账本</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="记账本">
+<meta name="theme-color" content="#3b82f6">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%233b82f6'/><text y='.9em' font-size='80' x='10'>💰</text></svg>">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  [x-cloak] { display: none !important; }
+  * { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 4rem);
+  }
+  .glass { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); background: rgba(255,255,255,0.85); }
+  .income-badge { background: #dcfce7; color: #16a34a; }
+  .expense-badge { background: #fee2e2; color: #dc2626; }
+  .nav-btn.active { background: #3b82f6; color: white; }
+  .nav-btn { transition: all 0.2s; }
+  input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; }
+  .drag-over { border-color: #3b82f6 !important; background: #eff6ff !important; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  .fade-in { animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .modal-bg { background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+  input, select { font-size: 16px !important; }
+</style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
+
+<div x-data="app()" x-cloak class="max-w-6xl mx-auto px-4 py-6 pb-20 sm:pb-6">
+
+  <!-- Header -->
+  <div class="glass rounded-2xl shadow-lg p-6 mb-6">
+    <div class="flex items-center justify-between flex-wrap gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-blue-500 rounded-xl flex items-center justify-center">
+          <span class="text-white text-xl">💰</span>
+        </div>
+        <div>
+          <h1 class="text-2xl font-bold text-gray-800">记账本</h1>
+          <p class="text-sm text-gray-500" x-text="currentMonthLabel"></p>
+        </div>
+      </div>
+      <div class="flex gap-3 flex-wrap">
+        <div class="bg-green-50 border border-green-200 rounded-xl px-4 py-2 text-center">
+          <div class="text-xs text-green-600 font-medium">本月收入</div>
+          <div class="text-lg font-bold text-green-600" x-text="'¥' + monthIncome.toFixed(2)"></div>
+        </div>
+        <div class="bg-red-50 border border-red-200 rounded-xl px-4 py-2 text-center">
+          <div class="text-xs text-red-600 font-medium">本月支出</div>
+          <div class="text-lg font-bold text-red-600" x-text="'¥' + monthExpense.toFixed(2)"></div>
+        </div>
+        <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-center">
+          <div class="text-xs text-blue-600 font-medium">本月结余</div>
+          <div class="text-lg font-bold text-blue-600" x-text="'¥' + (monthIncome - monthExpense).toFixed(2)"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Nav (桌面端显示，移动端隐藏) -->
+  <div class="glass rounded-2xl shadow-lg p-2 mb-6 hidden sm:flex gap-2 flex-wrap">
+    <button @click="tab='records'" :class="tab==='records' ? 'active' : 'text-gray-600 hover:bg-gray-100'" class="nav-btn flex-1 min-w-[100px] py-2 px-4 rounded-xl text-sm font-medium">📋 账单记录</button>
+    <button @click="tab='add'" :class="tab==='add' ? 'active' : 'text-gray-600 hover:bg-gray-100'" class="nav-btn flex-1 min-w-[100px] py-2 px-4 rounded-xl text-sm font-medium">➕ 新增记录</button>
+    <button @click="tab='import'" :class="tab==='import' ? 'active' : 'text-gray-600 hover:bg-gray-100'" class="nav-btn flex-1 min-w-[100px] py-2 px-4 rounded-xl text-sm font-medium">📂 导入账单</button>
+    <button @click="tab='stats'" :class="tab==='stats' ? 'active' : 'text-gray-600 hover:bg-gray-100'" class="nav-btn flex-1 min-w-[100px] py-2 px-4 rounded-xl text-sm font-medium">📊 统计分析</button>
+    <button @click="tab='export'" :class="tab==='export' ? 'active' : 'text-gray-600 hover:bg-gray-100'" class="nav-btn flex-1 min-w-[100px] py-2 px-4 rounded-xl text-sm font-medium">📤 导出Excel</button>
+  </div>
+
+  <!-- 账单记录 -->
+  <div x-show="tab==='records'" class="fade-in">
+    <div class="glass rounded-2xl shadow-lg p-6">
+      <!-- Filter Bar -->
+      <div class="flex flex-wrap gap-3 mb-6">
+        <input x-model="searchText" type="text" placeholder="🔍 搜索摘要/备注..." class="border border-gray-200 rounded-xl px-4 py-2 text-sm flex-1 min-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <select x-model="filterType" class="border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          <option value="">全部类型</option>
+          <option value="收入">收入</option>
+          <option value="支出">支出</option>
+        </select>
+        <select x-model="filterCategory" class="border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          <option value="">全部分类</option>
+          <template x-for="c in categories" :key="c"><option :value="c" x-text="c"></option></template>
+        </select>
+        <input x-model="filterDateFrom" type="date" class="border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <span class="flex items-center text-gray-400 text-sm">至</span>
+        <input x-model="filterDateTo" type="date" class="border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <button @click="clearFilters()" class="border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-500 hover:bg-gray-50">清空筛选</button>
+      </div>
+
+      <!-- Table -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-gray-100">
+              <th class="text-left py-2 px-2 sm:py-3 sm:px-3 text-gray-500 font-medium text-xs sm:text-sm">日期</th>
+              <th class="text-left py-2 px-2 sm:py-3 sm:px-3 text-gray-500 font-medium text-xs sm:text-sm">类型</th>
+              <th class="text-left py-2 px-2 sm:py-3 sm:px-3 text-gray-500 font-medium text-xs sm:text-sm">分类</th>
+              <th class="text-left py-2 px-2 sm:py-3 sm:px-3 text-gray-500 font-medium text-xs sm:text-sm">摘要</th>
+              <th class="text-right py-2 px-2 sm:py-3 sm:px-3 text-gray-500 font-medium text-xs sm:text-sm">金额</th>
+              <th class="text-left py-3 px-3 text-gray-500 font-medium hidden sm:table-cell">备注</th>
+              <th class="text-center py-3 px-3 text-gray-500 font-medium">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-if="filteredRecords.length === 0">
+              <tr><td colspan="7" class="text-center py-16 text-gray-400">
+                <div class="text-4xl mb-2">📭</div>
+                <div>暂无记录</div>
+              </td></tr>
+            </template>
+            <template x-for="r in paginatedRecords" :key="r.id">
+              <tr class="border-b border-gray-50 hover:bg-blue-50/30 transition-colors">
+                <td class="py-2 px-2 text-gray-600 text-xs sm:text-sm sm:py-3 sm:px-3" x-text="r.date"></td>
+                <td class="py-2 px-2 sm:py-3 sm:px-3">
+                  <span :class="r.type==='收入' ? 'income-badge' : 'expense-badge'" class="px-2 py-0.5 rounded-full text-xs font-medium" x-text="r.type"></span>
+                </td>
+                <td class="py-2 px-2 text-gray-600 text-xs sm:text-sm sm:py-3 sm:px-3" x-text="r.category"></td>
+                <td class="py-2 px-2 text-gray-700 font-medium text-xs sm:text-sm sm:py-3 sm:px-3 max-w-[80px] sm:max-w-none truncate" x-text="r.summary"></td>
+                <td class="py-2 px-2 text-right font-bold text-xs sm:text-sm sm:py-3 sm:px-3" :class="r.type==='收入' ? 'text-green-600' : 'text-red-500'" x-text="(r.type==='收入' ? '+' : '-') + '¥' + Number(r.amount).toFixed(2)"></td>
+                <td class="py-3 px-3 text-gray-400 text-xs max-w-[120px] truncate hidden sm:table-cell" x-text="r.note || '-'"></td>
+                <td class="py-2 px-2 text-center">
+                  <button @click="editRecord(r)" class="text-blue-400 hover:text-blue-600 mr-1 text-sm px-2 py-1 rounded">编辑</button>
+                  <button @click="deleteRecord(r.id)" class="text-red-400 hover:text-red-600 text-sm px-2 py-1 rounded">删除</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination -->
+      <div class="flex items-center justify-between mt-4 text-sm text-gray-500">
+        <span x-text="'共 ' + filteredRecords.length + ' 条记录'"></span>
+        <div class="flex gap-2">
+          <button @click="page > 1 && page--" :disabled="page <= 1" class="px-3 py-1 border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-50">上一页</button>
+          <span class="px-3 py-1" x-text="page + ' / ' + Math.max(1, Math.ceil(filteredRecords.length / pageSize))"></span>
+          <button @click="page < Math.ceil(filteredRecords.length / pageSize) && page++" :disabled="page >= Math.ceil(filteredRecords.length / pageSize)" class="px-3 py-1 border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-50">下一页</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新增记录 -->
+  <div x-show="tab==='add'" class="fade-in">
+    <div class="glass rounded-2xl shadow-lg p-6 max-w-xl mx-auto">
+      <h2 class="text-lg font-bold text-gray-700 mb-6">新增账单记录</h2>
+      <form @submit.prevent="saveRecord()">
+        <div class="grid grid-cols-2 gap-4 mb-4">
+          <div class="col-span-2">
+            <label class="block text-sm font-medium text-gray-600 mb-1">收支类型 *</label>
+            <div class="flex gap-3">
+              <button type="button" @click="form.type='支出'" :class="form.type==='支出' ? 'bg-red-500 text-white border-red-500' : 'bg-white text-gray-600 border-gray-200 hover:border-red-300'" class="flex-1 py-2 rounded-xl border text-sm font-medium transition-all">支出</button>
+              <button type="button" @click="form.type='收入'" :class="form.type==='收入' ? 'bg-green-500 text-white border-green-500' : 'bg-white text-gray-600 border-gray-200 hover:border-green-300'" class="flex-1 py-2 rounded-xl border text-sm font-medium transition-all">收入</button>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-600 mb-1">日期 *</label>
+            <input x-model="form.date" type="date" required class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-600 mb-1">金额 (元) *</label>
+            <input x-model="form.amount" type="number" step="0.01" min="0.01" required placeholder="0.00" class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-600 mb-1">分类 *</label>
+            <select x-model="form.category" required class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+              <option value="">请选择分类</option>
+              <template x-for="c in (form.type==='收入' ? incomeCategories : expenseCategories)" :key="c"><option :value="c" x-text="c"></option></template>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-600 mb-1">摘要 *</label>
+            <input x-model="form.summary" type="text" required placeholder="如：午餐、工资..." class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          </div>
+          <div class="col-span-2">
+            <label class="block text-sm font-medium text-gray-600 mb-1">备注</label>
+            <input x-model="form.note" type="text" placeholder="可选备注..." class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          </div>
+        </div>
+        <div class="flex gap-3 mt-2">
+          <button type="submit" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-2.5 rounded-xl text-sm font-medium transition-all">
+            <span x-text="editingId ? '保存修改' : '添加记录'"></span>
+          </button>
+          <button type="button" @click="resetForm()" class="px-6 bg-gray-100 hover:bg-gray-200 text-gray-600 py-2.5 rounded-xl text-sm font-medium transition-all">重置</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 导入账单 -->
+  <div x-show="tab==='import'" class="fade-in">
+    <div class="glass rounded-2xl shadow-lg p-6">
+      <h2 class="text-lg font-bold text-gray-700 mb-2">导入账单</h2>
+      <p class="text-sm text-gray-400 mb-6">微信账单支持 Excel（.xlsx）文件；支付宝账单支持 CSV 文件（GBK/UTF-8 自动识别）</p>
+      
+      <div class="grid md:grid-cols-2 gap-4 mb-6">
+        <div class="border-2 border-dashed border-blue-200 rounded-2xl p-6 text-center hover:border-blue-400 transition-colors cursor-pointer"
+          @click="$refs.wechatFile.click()"
+          @dragover.prevent="$el.classList.add('drag-over')"
+          @dragleave="$el.classList.remove('drag-over')"
+          @drop.prevent="$el.classList.remove('drag-over'); handleFileDrop($event, 'wechat')">
+          <div class="text-4xl mb-2">💚</div>
+          <div class="font-semibold text-gray-700 mb-1">微信账单</div>
+          <div class="text-xs text-gray-400 mb-1">微信 → 我 → 支付 → 账单 → 导出账单</div>
+          <div class="text-xs text-blue-400">支持 .xlsx / .xls / .csv</div>
+          <input type="file" accept=".xlsx,.xls,.csv" x-ref="wechatFile" class="hidden" @change="handleFileSelect($event, 'wechat')">
+        </div>
+        <div class="border-2 border-dashed border-blue-200 rounded-2xl p-6 text-center hover:border-blue-400 transition-colors cursor-pointer"
+          @click="$refs.alipayFile.click()"
+          @dragover.prevent="$el.classList.add('drag-over')"
+          @dragleave="$el.classList.remove('drag-over')"
+          @drop.prevent="$el.classList.remove('drag-over'); handleFileDrop($event, 'alipay')">
+          <div class="text-4xl mb-2">💙</div>
+          <div class="font-semibold text-gray-700 mb-1">支付宝账单</div>
+          <div class="text-xs text-gray-400">支付宝 → 我的 → 账单 → 更多 → 开具交易流水证明</div>
+          <input type="file" accept=".csv" x-ref="alipayFile" class="hidden" @change="handleFileSelect($event, 'alipay')">
+        </div>
+      </div>
+
+      <!-- Import Preview -->
+      <div x-show="importPreview.length > 0" class="fade-in">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-gray-700" x-text="'解析到 ' + importPreview.length + ' 条记录（预览）'"></h3>
+          <div class="flex gap-2">
+            <button @click="confirmImport()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium">确认导入</button>
+            <button @click="importPreview=[]" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-2 rounded-xl text-sm">取消</button>
+          </div>
+        </div>
+        <div class="overflow-x-auto max-h-80 rounded-xl border border-gray-100">
+          <table class="w-full text-xs">
+            <thead class="bg-gray-50 sticky top-0">
+              <tr>
+                <th class="text-left py-2 px-3 text-gray-500">日期</th>
+                <th class="text-left py-2 px-3 text-gray-500">类型</th>
+                <th class="text-left py-2 px-3 text-gray-500">摘要</th>
+                <th class="text-right py-2 px-3 text-gray-500">金额</th>
+                <th class="text-left py-2 px-3 text-gray-500">备注</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="(r,i) in importPreview.slice(0,50)" :key="i">
+                <tr class="border-b border-gray-50 hover:bg-gray-50">
+                  <td class="py-2 px-3" x-text="r.date"></td>
+                  <td class="py-2 px-3"><span :class="r.type==='收入' ? 'income-badge' : 'expense-badge'" class="px-1.5 py-0.5 rounded text-xs" x-text="r.type"></span></td>
+                  <td class="py-2 px-3 max-w-[160px] truncate" x-text="r.summary"></td>
+                  <td class="py-2 px-3 text-right font-medium" :class="r.type==='收入' ? 'text-green-600' : 'text-red-500'" x-text="'¥' + Number(r.amount).toFixed(2)"></td>
+                  <td class="py-2 px-3 text-gray-400 truncate max-w-[100px]" x-text="r.note || '-'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <p x-show="importPreview.length > 50" class="text-xs text-gray-400 mt-1 text-center" x-text="'仅显示前50条，共 ' + importPreview.length + ' 条'"></p>
+      </div>
+
+      <!-- Import Log -->
+      <div x-show="importLog" class="mt-4 p-3 rounded-xl text-sm" :class="importLogOk ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'" x-text="importLog"></div>
+    </div>
+  </div>
+
+  <!-- 统计分析 -->
+  <div x-show="tab==='stats'" class="fade-in">
+    <div class="grid md:grid-cols-2 gap-6">
+      <!-- Month Selector -->
+      <div class="glass rounded-2xl shadow-lg p-6 md:col-span-2">
+        <div class="flex items-center gap-4 flex-wrap">
+          <label class="text-sm font-medium text-gray-600">统计月份：</label>
+          <input x-model="statsMonth" type="month" @change="scheduleRenderCharts()" class="border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          <span class="text-sm text-gray-500">收入: <span class="font-bold text-green-600" x-text="'¥' + statsIncome.toFixed(2)"></span></span>
+          <span class="text-sm text-gray-500">支出: <span class="font-bold text-red-500" x-text="'¥' + statsExpense.toFixed(2)"></span></span>
+          <span class="text-sm text-gray-500">结余: <span class="font-bold text-blue-600" x-text="'¥' + (statsIncome - statsExpense).toFixed(2)"></span></span>
+        </div>
+      </div>
+
+      <!-- 支出分类 -->
+      <div class="glass rounded-2xl shadow-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-gray-700">支出分类分布</h3>
+          <div class="flex gap-1 bg-gray-100 rounded-lg p-1">
+            <button @click="distChartType='doughnut'; scheduleRenderCharts()" :class="distChartType==='doughnut' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'" class="px-3 py-1 rounded-md text-xs font-medium transition-all">环形</button>
+            <button @click="distChartType='bar'; scheduleRenderCharts()" :class="distChartType==='bar' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'" class="px-3 py-1 rounded-md text-xs font-medium transition-all">柱状</button>
+          </div>
+        </div>
+        <div style="position:relative;height:260px;">
+          <canvas id="expenseChart"></canvas>
+        </div>
+      </div>
+
+      <!-- 收入分类 -->
+      <div class="glass rounded-2xl shadow-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-gray-700">收入分类分布</h3>
+          <div class="flex gap-1 bg-gray-100 rounded-lg p-1">
+            <button @click="distChartType='doughnut'; scheduleRenderCharts()" :class="distChartType==='doughnut' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'" class="px-3 py-1 rounded-md text-xs font-medium transition-all">环形</button>
+            <button @click="distChartType='bar'; scheduleRenderCharts()" :class="distChartType==='bar' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'" class="px-3 py-1 rounded-md text-xs font-medium transition-all">柱状</button>
+          </div>
+        </div>
+        <div style="position:relative;height:260px;">
+          <canvas id="incomeChart"></canvas>
+        </div>
+      </div>
+
+      <!-- 趋势图 -->
+      <div class="glass rounded-2xl shadow-lg p-6 md:col-span-2">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-gray-700">近6个月收支趋势</h3>
+          <div class="flex gap-1 bg-gray-100 rounded-lg p-1">
+            <button @click="trendChartType='bar'; scheduleRenderCharts()" :class="trendChartType==='bar' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'" class="px-3 py-1 rounded-md text-xs font-medium transition-all">柱状</button>
+            <button @click="trendChartType='line'; scheduleRenderCharts()" :class="trendChartType==='line' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'" class="px-3 py-1 rounded-md text-xs font-medium transition-all">折线</button>
+          </div>
+        </div>
+        <div style="position:relative;height:240px;">
+          <canvas id="trendChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导出Excel -->
+  <div x-show="tab==='export'" class="fade-in">
+    <div class="glass rounded-2xl shadow-lg p-6 max-w-xl mx-auto">
+      <h2 class="text-lg font-bold text-gray-700 mb-6">导出账单到 Excel</h2>
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-600 mb-1">开始日期</label>
+            <input x-model="exportFrom" type="date" class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-600 mb-1">结束日期</label>
+            <input x-model="exportTo" type="date" class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">类型筛选</label>
+          <select x-model="exportTypeFilter" class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+            <option value="">全部</option>
+            <option value="收入">仅收入</option>
+            <option value="支出">仅支出</option>
+          </select>
+        </div>
+        <div class="bg-blue-50 rounded-xl p-4 text-sm text-blue-600" x-text="'将导出 ' + exportCount + ' 条记录'"></div>
+        <button @click="exportExcel()" :disabled="exportCount===0" class="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 text-white py-3 rounded-xl font-medium transition-all">
+          📥 导出 Excel 文件
+        </button>
+        <button @click="exportFrom=''; exportTo=''; exportTypeFilter=''" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-600 py-2 rounded-xl text-sm">清空筛选（导出全部）</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部导航栏（移动端） -->
+  <div class="fixed bottom-0 left-0 right-0 flex sm:hidden bg-white border-t border-gray-200 z-40" style="padding-bottom: env(safe-area-inset-bottom);">
+    <button @click="tab='records'" :class="tab==='records' ? 'text-blue-600' : 'text-gray-500'" class="flex-1 flex flex-col items-center justify-center py-2 gap-0.5">
+      <span class="text-xl leading-none">📋</span>
+      <span class="text-[10px] font-medium">账单</span>
+    </button>
+    <button @click="tab='add'" :class="tab==='add' ? 'text-blue-600' : 'text-gray-500'" class="flex-1 flex flex-col items-center justify-center py-2 gap-0.5">
+      <span class="text-xl leading-none">➕</span>
+      <span class="text-[10px] font-medium">新增</span>
+    </button>
+    <button @click="tab='import'" :class="tab==='import' ? 'text-blue-600' : 'text-gray-500'" class="flex-1 flex flex-col items-center justify-center py-2 gap-0.5">
+      <span class="text-xl leading-none">📂</span>
+      <span class="text-[10px] font-medium">导入</span>
+    </button>
+    <button @click="tab='stats'" :class="tab==='stats' ? 'text-blue-600' : 'text-gray-500'" class="flex-1 flex flex-col items-center justify-center py-2 gap-0.5">
+      <span class="text-xl leading-none">📊</span>
+      <span class="text-[10px] font-medium">统计</span>
+    </button>
+    <button @click="tab='export'" :class="tab==='export' ? 'text-blue-600' : 'text-gray-500'" class="flex-1 flex flex-col items-center justify-center py-2 gap-0.5">
+      <span class="text-xl leading-none">📤</span>
+      <span class="text-[10px] font-medium">导出</span>
+    </button>
+  </div>
+
+  <!-- Toast -->
+  <div x-show="toast" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-2" x-transition:enter-end="opacity-100 translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-end="opacity-0" class="fixed bottom-20 sm:bottom-6 right-4 sm:right-6 glass rounded-xl shadow-xl px-5 py-3 text-sm font-medium z-50" :class="toastOk ? 'text-green-700 border border-green-200' : 'text-red-700 border border-red-200'" x-text="toast"></div>
+
+</div>
+
+<script>
+function app() {
+  return {
+    tab: 'records',
+    records: [],
+    form: { type: '支出', date: '', amount: '', category: '', summary: '', note: '' },
+    editingId: null,
+    searchText: '', filterType: '', filterCategory: '', filterDateFrom: '', filterDateTo: '',
+    page: 1, pageSize: 20,
+    importPreview: [], importLog: '', importLogOk: true,
+    exportFrom: '', exportTo: '', exportTypeFilter: '',
+    statsMonth: '',
+    toast: '', toastOk: true,
+    expenseChartInst: null, incomeChartInst: null, trendChartInst: null,
+    distChartType: 'doughnut',
+    trendChartType: 'bar',
+
+    expenseCategories: ['餐饮', '购物', '交通', '住房', '医疗', '娱乐', '教育', '生活服务', '数码', '服装', '转账', '还款', '其他支出'],
+    incomeCategories: ['工资', '奖金', '兼职', '转账收入', '理财', '退款', '报销', '其他收入'],
+
+    get categories() {
+      return [...new Set(this.records.map(r => r.category).filter(Boolean))];
+    },
+
+    get currentMonthLabel() {
+      const d = new Date(); return d.getFullYear() + '年' + (d.getMonth()+1) + '月';
+    },
+
+    get monthIncome() {
+      const m = new Date().toISOString().slice(0,7);
+      return this.records.filter(r => r.type==='收入' && r.date.startsWith(m)).reduce((s,r) => s + Number(r.amount), 0);
+    },
+
+    get monthExpense() {
+      const m = new Date().toISOString().slice(0,7);
+      return this.records.filter(r => r.type==='支出' && r.date.startsWith(m)).reduce((s,r) => s + Number(r.amount), 0);
+    },
+
+    get filteredRecords() {
+      let rs = [...this.records].sort((a,b) => b.date.localeCompare(a.date));
+      if (this.searchText) rs = rs.filter(r => (r.summary+r.note+r.category).toLowerCase().includes(this.searchText.toLowerCase()));
+      if (this.filterType) rs = rs.filter(r => r.type === this.filterType);
+      if (this.filterCategory) rs = rs.filter(r => r.category === this.filterCategory);
+      if (this.filterDateFrom) rs = rs.filter(r => r.date >= this.filterDateFrom);
+      if (this.filterDateTo) rs = rs.filter(r => r.date <= this.filterDateTo);
+      return rs;
+    },
+
+    get paginatedRecords() {
+      const s = (this.page-1)*this.pageSize;
+      return this.filteredRecords.slice(s, s+this.pageSize);
+    },
+
+    get statsIncome() {
+      return this.statsMonthRecords.filter(r=>r.type==='收入').reduce((s,r)=>s+Number(r.amount),0);
+    },
+    get statsExpense() {
+      return this.statsMonthRecords.filter(r=>r.type==='支出').reduce((s,r)=>s+Number(r.amount),0);
+    },
+    get statsMonthRecords() {
+      if (!this.statsMonth) return [];
+      return this.records.filter(r => r.date.startsWith(this.statsMonth));
+    },
+
+    get exportCount() {
+      return this.getExportRecords().length;
+    },
+
+    getExportRecords() {
+      let rs = [...this.records].sort((a,b) => a.date.localeCompare(b.date));
+      if (this.exportFrom) rs = rs.filter(r => r.date >= this.exportFrom);
+      if (this.exportTo) rs = rs.filter(r => r.date <= this.exportTo);
+      if (this.exportTypeFilter) rs = rs.filter(r => r.type === this.exportTypeFilter);
+      return rs;
+    },
+
+    init() {
+      const saved = localStorage.getItem('bookkeeping_records');
+      if (saved) this.records = JSON.parse(saved);
+      const today = new Date().toISOString().slice(0,10);
+      this.form.date = today;
+      this.statsMonth = today.slice(0,7);
+      this.$watch('records', () => this.saveData());
+      this.$watch('tab', (t) => { if (t==='stats') this.scheduleRenderCharts(); });
+    },
+
+    saveData() {
+      try {
+        localStorage.setItem('bookkeeping_records', JSON.stringify(this.records));
+      } catch(e) {
+        this.showToast('⚠️ 存储空间不足，请导出后清理数据', false);
+      }
+    },
+
+    saveRecord() {
+      if (!this.form.type || !this.form.date || !this.form.amount || !this.form.category || !this.form.summary) {
+        this.showToast('请填写所有必填项', false); return;
+      }
+      if (this.editingId) {
+        const idx = this.records.findIndex(r => r.id === this.editingId);
+        if (idx >= 0) this.records[idx] = { ...this.records[idx], ...this.form, amount: parseFloat(this.form.amount) };
+        this.showToast('✅ 记录已修改');
+        this.editingId = null;
+      } else {
+        this.records.push({ id: Date.now() + Math.random(), ...this.form, amount: parseFloat(this.form.amount) });
+        this.showToast('✅ 记录已添加');
+      }
+      this.resetForm();
+      this.tab = 'records';
+    },
+
+    editRecord(r) {
+      this.editingId = r.id;
+      this.form = { type: r.type, date: r.date, amount: String(r.amount), category: r.category, summary: r.summary, note: r.note || '' };
+      this.tab = 'add';
+    },
+
+    deleteRecord(id) {
+      if (!confirm('确认删除这条记录？')) return;
+      this.records = this.records.filter(r => r.id !== id);
+      this.showToast('🗑️ 已删除');
+    },
+
+    resetForm() {
+      this.editingId = null;
+      this.form = { type: '支出', date: new Date().toISOString().slice(0,10), amount: '', category: '', summary: '', note: '' };
+    },
+
+    clearFilters() {
+      this.searchText = ''; this.filterType = ''; this.filterCategory = '';
+      this.filterDateFrom = ''; this.filterDateTo = ''; this.page = 1;
+    },
+
+    // ===== 导入 =====
+    handleFileSelect(event, source) {
+      const file = event.target.files[0];
+      if (file) this.dispatchFile(file, source);
+      event.target.value = '';
+    },
+
+    handleFileDrop(event, source) {
+      const file = event.dataTransfer.files[0];
+      if (file) this.dispatchFile(file, source);
+    },
+
+    dispatchFile(file, source) {
+      const name = file.name.toLowerCase();
+      if (source === 'wechat' && (name.endsWith('.xlsx') || name.endsWith('.xls'))) {
+        this.parseWechatExcel(file);
+      } else {
+        this.parseCSV(file, source);
+      }
+    },
+
+    parseWechatExcel(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          // cellDates:true → 日期单元格直接返回 JS Date 对象，raw:true 保留原始值避免格式化歧义
+          const wb = XLSX.read(data, { type: 'array', cellDates: true });
+          const sheetName = wb.SheetNames[0];
+          const ws = wb.Sheets[sheetName];
+          // raw:true：日期=Date对象，数字=number，字符串=string
+          const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
+          const parsed = this.parseWechatExcelRows(aoa);
+          if (parsed.length === 0) {
+            this.importLog = '⚠️ 未解析到有效记录，请确认文件为微信支付账单 Excel 格式（含"交易时间"表头）';
+            this.importLogOk = false;
+          } else {
+            this.importPreview = parsed;
+            this.importLog = '';
+          }
+        } catch(err) {
+          this.importLog = '❌ 解析失败：' + err.message;
+          this.importLogOk = false;
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    },
+
+    parseWechatExcelRows(aoa) {
+      // 找表头行：包含"交易时间"的行（跳过前面的说明文字）
+      let headerIdx = aoa.findIndex(row => row.some(c => String(c).trim() === '交易时间'));
+      if (headerIdx < 0) return [];
+
+      const headers = aoa[headerIdx].map(h => String(h).trim());
+      const fi = (name) => headers.findIndex(h => h.includes(name));
+      const tIdx      = fi('交易时间');
+      const typeIdx   = fi('收/支');
+      const catIdx    = fi('交易类型');
+      const partyIdx  = fi('交易对方');
+      const goodsIdx  = fi('商品');
+      const amtIdx    = fi('金额');
+      const statusIdx = fi('当前状态');
+      const noteIdx   = fi('备注');
+
+      const result = [];
+      for (let i = headerIdx + 1; i < aoa.length; i++) {
+        const r = aoa[i];
+        if (!r || r.length === 0) continue;
+        if (r.every(c => c === '' || c == null)) continue;
+
+        // 收/支 字段
+        const typeStr = String(r[typeIdx] ?? '').replace(/\s/g, '');
+        if (!typeStr || typeStr === '/' || typeStr === '不计收支') continue;
+
+        // 过滤退款/撤销/失败状态
+        const status = String(r[statusIdx] ?? '').replace(/\s/g, '');
+        if (status.includes('退款') || status.includes('已撤销') || status.includes('失败')) continue;
+
+        // 金额：raw:true 时数字单元格直接是 number
+        const amtCell = r[amtIdx];
+        const amt = typeof amtCell === 'number'
+          ? amtCell
+          : parseFloat(String(amtCell ?? '').replace(/[¥￥,\s]/g, ''));
+        if (isNaN(amt) || amt <= 0) continue;
+
+        // 日期：cellDates:true + raw:true → JS Date 对象
+        let date = '';
+        const dtCell = r[tIdx];
+        if (dtCell instanceof Date && !isNaN(dtCell.getTime())) {
+          // 用本地时间（账单时区已固定，避免 UTC 偏移导致日期差1天）
+          const y  = dtCell.getFullYear();
+          const mo = String(dtCell.getMonth() + 1).padStart(2, '0');
+          const d  = String(dtCell.getDate()).padStart(2, '0');
+          date = `${y}-${mo}-${d}`;
+        } else {
+          // fallback：字符串截取
+          const s = String(dtCell ?? '').trim();
+          date = s.slice(0, 10).replace(/\//g, '-');
+        }
+        if (!date || date.length < 10) continue;
+
+        // 摘要：商品 > 交易对方，过滤无意义的"转账备注:微信转账"
+        const tradeType = String(r[catIdx]   ?? '').trim();
+        const goods     = String(r[goodsIdx] ?? '').trim();
+        const party     = String(r[partyIdx] ?? '').trim();
+        let summary = goods || party || '微信支付';
+        if (summary.startsWith('转账备注:') || summary === '微信转账') {
+          summary = party || tradeType || '微信转账';
+        }
+        summary = summary.replace(/^["']|["']$/g, '').trim() || '微信支付';
+
+        // 分类映射
+        const isIncome = typeStr.includes('收');
+        let category = isIncome ? '转账收入' : '购物';
+        if      (tradeType.includes('转账'))                            category = isIncome ? '转账收入' : '转账';
+        else if (tradeType.includes('餐饮') || tradeType.includes('食')) category = '餐饮';
+        else if (tradeType.includes('交通') || tradeType.includes('出行')) category = '交通';
+        else if (tradeType.includes('购物') || tradeType.includes('商超')) category = '购物';
+        else if (tradeType.includes('生活'))                             category = '生活服务';
+        else if (tradeType.includes('娱乐'))                             category = '娱乐';
+
+        const note = String(r[noteIdx] ?? '').replace(/^[/／]$/, '').trim();
+        result.push({
+          date,
+          type: isIncome ? '收入' : '支出',
+          category,
+          summary: summary.slice(0, 50),
+          amount: amt,
+          note
+        });
+      }
+      return result;
+    },
+
+    parseCSV(file, source) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          let text = e.target.result;
+          // GBK decode attempt
+          if (typeof text === 'string' && text.includes('â€')) {
+            // already decoded wrong, try again as arraybuffer
+          }
+          const rows = this.parseCSVText(text);
+          const parsed = source === 'wechat' ? this.parseWechat(rows) : this.parseAlipay(rows);
+          if (parsed.length === 0) { this.importLog = '⚠️ 未解析到有效记录，请检查文件格式'; this.importLogOk = false; return; }
+          this.importPreview = parsed;
+          this.importLog = '';
+        } catch(err) {
+          this.importLog = '解析失败：' + err.message; this.importLogOk = false;
+        }
+      };
+      // Try GBK first
+      const gbkReader = new FileReader();
+      gbkReader.onload = (e) => {
+        try {
+          const text = new TextDecoder('gbk').decode(e.target.result);
+          const rows = this.parseCSVText(text);
+          const parsed = source === 'wechat' ? this.parseWechat(rows) : this.parseAlipay(rows);
+          if (parsed.length > 0) {
+            this.importPreview = parsed; this.importLog = ''; return;
+          }
+        } catch(e2) {}
+        // Fallback UTF-8
+        reader.readAsText(file, 'utf-8');
+      };
+      gbkReader.readAsArrayBuffer(file);
+    },
+
+    parseCSVText(text) {
+      const lines = text.split(/\r?\n/);
+      return lines.map(line => {
+        const cols = []; let cur = ''; let inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const c = line[i];
+          if (c === '"') { inQ = !inQ; }
+          else if (c === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+          else cur += c;
+        }
+        cols.push(cur.trim());
+        return cols;
+      });
+    },
+
+    parseWechat(rows) {
+      // Find header row
+      let headerIdx = rows.findIndex(r => r.some(c => c.includes('交易时间') || c.includes('收/支')));
+      if (headerIdx < 0) headerIdx = rows.findIndex(r => r.length > 5);
+      const headers = rows[headerIdx] || [];
+      const idx = (name) => headers.findIndex(h => h.includes(name));
+      const tIdx = idx('交易时间'), typeIdx = idx('收/支'), partyIdx = idx('交易对方'), goodsIdx = idx('商品'), amtIdx = idx('金额'), statusIdx = idx('当前状态'), noteIdx = idx('备注');
+      const result = [];
+      for (let i = headerIdx + 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r || r.length < 5) continue;
+        const typeStr = (r[typeIdx] || '').replace(/\s/g,'');
+        if (!typeStr || typeStr === '/' || typeStr === '不计收支') continue;
+        const status = (r[statusIdx] || '').replace(/\s/g,'');
+        if (status === '已退款' || status === '退款成功') continue;
+        const amt = parseFloat((r[amtIdx] || '').replace(/[¥￥,\s]/g,''));
+        if (isNaN(amt) || amt <= 0) continue;
+        const dateRaw = (r[tIdx] || '').trim();
+        const date = dateRaw.slice(0,10).replace(/\//g,'-');
+        if (!date || date.length < 10) continue;
+        const summary = (r[goodsIdx] || r[partyIdx] || '微信支付').replace(/^["']|["']$/g,'').trim() || '微信支付';
+        const note = (r[noteIdx] || '').replace(/^["']|["']$/g,'').trim();
+        result.push({ date, type: typeStr.includes('收') ? '收入' : '支出', category: typeStr.includes('收') ? '转账收入' : '购物', summary, amount: amt, note });
+      }
+      return result;
+    },
+
+    parseAlipay(rows) {
+      let headerIdx = rows.findIndex(r => r.some(c => c.includes('交易时间') || c.includes('收/支') || c.includes('收/付款')));
+      if (headerIdx < 0) headerIdx = rows.findIndex(r => r.length > 5);
+      const headers = rows[headerIdx] || [];
+      const idx = (name) => headers.findIndex(h => h.includes(name));
+      const tIdx = idx('交易时间'), typeIdx = idx('收/支'), catIdx = idx('交易分类'), partyIdx = idx('交易对方'), goodsIdx = idx('商品名称'), amtIdx = idx('金额'), statusIdx = idx('交易状态'), noteIdx = idx('备注');
+      const result = [];
+      for (let i = headerIdx + 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r || r.length < 5) continue;
+        const typeStr = (r[typeIdx] || '').replace(/\s/g,'');
+        if (!typeStr || typeStr === '不计收支' || typeStr === '/') continue;
+        const status = (r[statusIdx] || '').replace(/\s/g,'');
+        if (status.includes('关闭') || status.includes('退款')) continue;
+        const amt = parseFloat((r[amtIdx] || '').replace(/[¥￥,\s]/g,''));
+        if (isNaN(amt) || amt <= 0) continue;
+        const dateRaw = (r[tIdx] || '').trim();
+        const date = dateRaw.slice(0,10).replace(/\//g,'-');
+        if (!date || date.length < 10) continue;
+        const cat = (r[catIdx] || '').replace(/^["']|["']$/g,'').trim();
+        const summary = (r[goodsIdx] || r[partyIdx] || '支付宝支付').replace(/^["']|["']$/g,'').trim() || '支付宝支付';
+        const note = (r[noteIdx] || '').replace(/^["']|["']$/g,'').trim();
+        result.push({ date, type: typeStr.includes('收') ? '收入' : '支出', category: cat || (typeStr.includes('收') ? '转账收入' : '购物'), summary, amount: amt, note });
+      }
+      return result;
+    },
+
+    confirmImport() {
+      const dupeCheck = new Set(this.records.map(r => r.date+'|'+r.amount+'|'+r.summary));
+      let added = 0, skipped = 0;
+      this.importPreview.forEach(r => {
+        const key = r.date+'|'+r.amount+'|'+r.summary;
+        if (dupeCheck.has(key)) { skipped++; return; }
+        this.records.push({ id: Date.now() + Math.random(), ...r });
+        dupeCheck.add(key);
+        added++;
+      });
+      this.importPreview = [];
+      this.importLog = `✅ 成功导入 ${added} 条，跳过重复 ${skipped} 条`;
+      this.importLogOk = true;
+      this.showToast(`✅ 导入完成：+${added} 条`);
+    },
+
+    // ===== 图表 =====
+    scheduleRenderCharts() {
+      // 延迟确保 x-show 过渡完成、canvas 已有尺寸
+      setTimeout(() => { requestAnimationFrame(() => this.renderCharts()); }, 80);
+    },
+
+    renderCharts() {
+      const rs = this.statsMonthRecords;
+      const expData = {}; const incData = {};
+      rs.forEach(r => {
+        const key = r.category || '其他';
+        if (r.type === '支出') expData[key] = (expData[key] || 0) + Number(r.amount);
+        else incData[key] = (incData[key] || 0) + Number(r.amount);
+      });
+      const colors = ['#3b82f6','#ef4444','#10b981','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#14b8a6','#f97316','#6366f1','#84cc16','#a855f7'];
+
+      const drawDist = (id, data, instKey) => {
+        const labels = Object.keys(data); const vals = Object.values(data);
+        const ctx = document.getElementById(id);
+        if (!ctx) return;
+        if (this[instKey]) { this[instKey].destroy(); this[instKey] = null; }
+        if (labels.length === 0) {
+          // 显示空状态文字
+          ctx.parentElement.innerHTML = `<canvas id="${id}"></canvas><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#9ca3af;font-size:14px;">暂无数据</div>`;
+          return;
+        }
+        const type = this.distChartType;
+        let cfg;
+        if (type === 'doughnut') {
+          cfg = {
+            type: 'doughnut',
+            data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 2, borderColor: '#fff' }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: {
+              legend: { position: 'right', labels: { font: { size: 11 }, padding: 10, boxWidth: 12 } },
+              tooltip: { callbacks: { label: c => ` ${c.label}: ¥${c.parsed.toFixed(2)}` } }
+            }}
+          };
+        } else {
+          cfg = {
+            type: 'bar',
+            data: { labels, datasets: [{ data: vals, backgroundColor: colors.slice(0, labels.length), borderRadius: 5 }] },
+            options: { responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ¥${c.parsed.y.toFixed(2)}` } } },
+              scales: { y: { ticks: { callback: v => '¥'+v }, grid: { color: '#f0f0f0' } }, x: { grid: { display: false } } }
+            }
+          };
+        }
+        this[instKey] = new Chart(ctx, cfg);
+      };
+
+      drawDist('expenseChart', expData, 'expenseChartInst');
+      drawDist('incomeChart',  incData, 'incomeChartInst');
+
+      // 趋势图
+      const months = []; const now = new Date();
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        months.push(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'));
+      }
+      const incArr = months.map(m => this.records.filter(r=>r.type==='收入'&&r.date.startsWith(m)).reduce((s,r)=>s+Number(r.amount),0));
+      const expArr = months.map(m => this.records.filter(r=>r.type==='支出'&&r.date.startsWith(m)).reduce((s,r)=>s+Number(r.amount),0));
+      const tCtx = document.getElementById('trendChart');
+      if (tCtx) {
+        if (this.trendChartInst) { this.trendChartInst.destroy(); this.trendChartInst = null; }
+        const t = this.trendChartType;
+        const isLine = t === 'line';
+        this.trendChartInst = new Chart(tCtx, {
+          type: t,
+          data: {
+            labels: months.map(m => m.slice(5) + '月'),
+            datasets: [
+              {
+                label: '收入',
+                data: incArr,
+                backgroundColor: isLine ? 'rgba(16,185,129,0.1)' : 'rgba(16,185,129,0.75)',
+                borderColor: '#10b981',
+                borderWidth: isLine ? 2 : 0,
+                borderRadius: isLine ? 0 : 5,
+                pointBackgroundColor: '#10b981',
+                tension: 0.35,
+                fill: isLine
+              },
+              {
+                label: '支出',
+                data: expArr,
+                backgroundColor: isLine ? 'rgba(239,68,68,0.1)' : 'rgba(239,68,68,0.75)',
+                borderColor: '#ef4444',
+                borderWidth: isLine ? 2 : 0,
+                borderRadius: isLine ? 0 : 5,
+                pointBackgroundColor: '#ef4444',
+                tension: 0.35,
+                fill: isLine
+              }
+            ]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'top', labels: { font: { size: 12 }, padding: 16 } },
+              tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ¥${c.parsed.y.toFixed(2)}` } }
+            },
+            scales: {
+              y: { ticks: { callback: v => '¥'+v }, grid: { color: '#f3f4f6' }, beginAtZero: true },
+              x: { grid: { display: false } }
+            }
+          }
+        });
+      }
+    },
+
+    // ===== 导出 =====
+    exportExcel() {
+      const rs = this.getExportRecords();
+      if (rs.length === 0) { this.showToast('没有符合条件的记录', false); return; }
+      const wsData = [['日期','类型','分类','摘要','金额(元)','备注']];
+      rs.forEach(r => wsData.push([r.date, r.type, r.category, r.summary, Number(r.amount), r.note || '']));
+      // Summary
+      const income = rs.filter(r=>r.type==='收入').reduce((s,r)=>s+Number(r.amount),0);
+      const expense = rs.filter(r=>r.type==='支出').reduce((s,r)=>s+Number(r.amount),0);
+      wsData.push([]); wsData.push(['汇总','','','','','']);
+      wsData.push(['总收入','','','',income,'']); wsData.push(['总支出','','','',expense,'']); wsData.push(['结余','','','',(income-expense),'']);
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      ws['!cols'] = [{wch:12},{wch:6},{wch:12},{wch:30},{wch:12},{wch:20}];
+      XLSX.utils.book_append_sheet(wb, ws, '账单明细');
+      const from = this.exportFrom || rs[0]?.date || '';
+      const to = this.exportTo || rs[rs.length-1]?.date || '';
+      XLSX.writeFile(wb, `账单_${from}_${to}.xlsx`);
+      this.showToast(`✅ 已导出 ${rs.length} 条记录`);
+    },
+
+    showToast(msg, ok=true) {
+      this.toast = msg; this.toastOk = ok;
+      setTimeout(() => { this.toast = ''; }, 3000);
+    },
+  }
+}
+</script>
+</body>
+</html>
