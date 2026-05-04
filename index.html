@@ -335,6 +335,10 @@
     <div class="glass rounded-2xl shadow-lg p-6 max-w-xl mx-auto">
       <h2 class="text-lg font-bold text-gray-700 mb-6">导出账单到 Excel</h2>
       <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">文件标题（第一行抬头）</label>
+          <input x-model="exportTitle" type="text" placeholder="例：春宇加币现金收支明细(2026年）" class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="block text-sm font-medium text-gray-600 mb-1">开始日期</label>
@@ -401,7 +405,7 @@ function app() {
     searchText: '', filterType: '', filterCategory: '', filterDateFrom: '', filterDateTo: '',
     page: 1, pageSize: 20,
     importPreview: [], importLog: '', importLogOk: true,
-    exportFrom: '', exportTo: '', exportTypeFilter: '',
+    exportFrom: '', exportTo: '', exportTypeFilter: '', exportTitle: '',
     statsMonth: '',
     toast: '', toastOk: true,
     expenseChartInst: null, incomeChartInst: null, trendChartInst: null,
@@ -652,7 +656,8 @@ function app() {
           category,
           summary: summary.slice(0, 50),
           amount: amt,
-          note
+          note,
+          source: '微信'
         });
       }
       return result;
@@ -730,7 +735,7 @@ function app() {
         if (!date || date.length < 10) continue;
         const summary = (r[goodsIdx] || r[partyIdx] || '微信支付').replace(/^["']|["']$/g,'').trim() || '微信支付';
         const note = (r[noteIdx] || '').replace(/^["']|["']$/g,'').trim();
-        result.push({ date, type: typeStr.includes('收') ? '收入' : '支出', category: typeStr.includes('收') ? '转账收入' : '购物', summary, amount: amt, note });
+        result.push({ date, type: typeStr.includes('收') ? '收入' : '支出', category: typeStr.includes('收') ? '转账收入' : '购物', summary, amount: amt, note, source: '微信' });
       }
       return result;
     },
@@ -757,7 +762,7 @@ function app() {
         const cat = (r[catIdx] || '').replace(/^["']|["']$/g,'').trim();
         const summary = (r[goodsIdx] || r[partyIdx] || '支付宝支付').replace(/^["']|["']$/g,'').trim() || '支付宝支付';
         const note = (r[noteIdx] || '').replace(/^["']|["']$/g,'').trim();
-        result.push({ date, type: typeStr.includes('收') ? '收入' : '支出', category: cat || (typeStr.includes('收') ? '转账收入' : '购物'), summary, amount: amt, note });
+        result.push({ date, type: typeStr.includes('收') ? '收入' : '支出', category: cat || (typeStr.includes('收') ? '转账收入' : '购物'), summary, amount: amt, note, source: '支付宝' });
       }
       return result;
     },
@@ -891,21 +896,117 @@ function app() {
     exportExcel() {
       const rs = this.getExportRecords();
       if (rs.length === 0) { this.showToast('没有符合条件的记录', false); return; }
-      const wsData = [['日期','类型','分类','摘要','金额(元)','备注']];
-      rs.forEach(r => wsData.push([r.date, r.type, r.category, r.summary, Number(r.amount), r.note || '']));
-      // Summary
-      const income = rs.filter(r=>r.type==='收入').reduce((s,r)=>s+Number(r.amount),0);
-      const expense = rs.filter(r=>r.type==='支出').reduce((s,r)=>s+Number(r.amount),0);
-      wsData.push([]); wsData.push(['汇总','','','','','']);
-      wsData.push(['总收入','','','',income,'']); wsData.push(['总支出','','','',expense,'']); wsData.push(['结余','','','',(income-expense),'']);
+
+      // 按日期排序
+      const sorted = [...rs].sort((a,b) => a.date.localeCompare(b.date));
+      const from = this.exportFrom || sorted[0]?.date || '';
+      const to   = this.exportTo   || sorted[sorted.length-1]?.date || '';
+      const title = this.exportTitle || '收支明细';
+
+      // ====== 构建模板格式的工作表数据 ======
+      // 行1：标题（A1:G1合并）
+      // 行2：日期 | 说明 | 人民币(C2:E2合并) | | | 方式(F2) | 备注(G2:G3合并)
+      // 行3：         |      | 借方 | 贷方 | 余额 | 微信/支付宝
+      // 行4：期初余额（余额为0）
+      // 行5+：数据行   日期 | 分类 | 借方(收入) | 贷方(支出) | =余额公式 | 方式 | 摘要
+
+      const ws = {};
+      const R = (r,c) => XLSX.utils.encode_cell({r,c}); // 0-indexed
+
+      // 辅助：设置单元格
+      const set = (addr, v, t='s') => { ws[addr] = { v, t }; };
+      const setN = (addr, v) => { ws[addr] = { v, t:'n', z:'#,##0.00' }; };
+
+      // === 行0 (Row 1): 标题 ===
+      set('A1', title);
+
+      // === 行1 (Row 2): 列头 ===
+      set('A2', '日期');
+      set('B2', '说明');
+      set('C2', '人民币');
+      set('F2', '方式');
+      set('G2', '备注');
+
+      // === 行2 (Row 3): 子列头 ===
+      set('C3', '借方');
+      set('D3', '贷方');
+      set('E3', '余额');
+      set('F3', '微信/支付宝');
+
+      // === 行3 (Row 4): 期初余额 ===
+      set('A4', '期初');
+      set('B4', '期初余额');
+      setN('E4', 0);
+
+      // === 数据行 ===
+      sorted.forEach((r, i) => {
+        const rowNum = i + 5; // 从第5行开始
+        const rowIdx = rowNum - 1; // 0-indexed
+        const isIncome = r.type === '收入';
+
+        // A: 日期
+        ws[`A${rowNum}`] = { v: r.date, t: 's' };
+        // B: 说明（分类）
+        set(`B${rowNum}`, r.category || r.summary || '');
+        // C: 借方（收入）
+        if (isIncome) {
+          setN(`C${rowNum}`, Number(r.amount));
+        }
+        // D: 贷方（支出）
+        if (!isIncome) {
+          setN(`D${rowNum}`, Number(r.amount));
+        }
+        // E: 余额（公式）
+        const prevE = rowNum === 5 ? 'E4' : `E${rowNum-1}`;
+        ws[`E${rowNum}`] = { f: `${prevE}+IF(ISNUMBER(C${rowNum}),C${rowNum},0)-IF(ISNUMBER(D${rowNum}),D${rowNum},0)`, t:'n', z:'#,##0.00' };
+        // F: 方式（微信/支付宝/手动）
+        set(`F${rowNum}`, r.source || '');
+        // G: 备注/摘要
+        set(`G${rowNum}`, r.summary || r.note || '');
+      });
+
+      // 计算最后行号（数据行结束后再加汇总）
+      const lastDataRow = sorted.length + 4;
+      const sumRow1 = lastDataRow + 2;
+      const sumRow2 = lastDataRow + 3;
+      const sumRow3 = lastDataRow + 4;
+
+      // 汇总行
+      set(`A${sumRow1}`, '汇总');
+      set(`B${sumRow1}`, '总收入');
+      ws[`C${sumRow1}`] = { f: `SUM(C5:C${lastDataRow})`, t:'n', z:'#,##0.00' };
+      set(`B${sumRow2}`, '总支出');
+      ws[`D${sumRow2}`] = { f: `SUM(D5:D${lastDataRow})`, t:'n', z:'#,##0.00' };
+      set(`B${sumRow3}`, '结余');
+      ws[`E${sumRow3}`] = { f: `C${sumRow1}-D${sumRow2}`, t:'n', z:'#,##0.00' };
+
+      // === 合并单元格（模板格式） ===
+      ws['!merges'] = [
+        { s:{r:0,c:0}, e:{r:0,c:6} },   // A1:G1 标题
+        { s:{r:1,c:0}, e:{r:2,c:0} },   // A2:A3 日期
+        { s:{r:1,c:1}, e:{r:2,c:1} },   // B2:B3 说明
+        { s:{r:1,c:2}, e:{r:1,c:4} },   // C2:E2 人民币
+        { s:{r:1,c:6}, e:{r:2,c:6} },   // G2:G3 备注
+      ];
+
+      // === 列宽（对应模板） ===
+      ws['!cols'] = [
+        {wpx: 79},  // A 日期
+        {wpx: 98},  // B 说明
+        {wpx: 41},  // C 借方
+        {wpx: 73},  // D 贷方
+        {wpx: 94},  // E 余额
+        {wpx: 98},  // F 方式
+        {wpx: 122}, // G 备注
+      ];
+
+      // === 范围 ===
+      ws['!ref'] = `A1:G${sumRow3}`;
+
       const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet(wsData);
-      ws['!cols'] = [{wch:12},{wch:6},{wch:12},{wch:30},{wch:12},{wch:20}];
-      XLSX.utils.book_append_sheet(wb, ws, '账单明细');
-      const from = this.exportFrom || rs[0]?.date || '';
-      const to = this.exportTo || rs[rs.length-1]?.date || '';
+      XLSX.utils.book_append_sheet(wb, ws, '收支明细');
       XLSX.writeFile(wb, `账单_${from}_${to}.xlsx`);
-      this.showToast(`✅ 已导出 ${rs.length} 条记录`);
+      this.showToast(`✅ 已导出 ${sorted.length} 条记录`);
     },
 
     showToast(msg, ok=true) {
