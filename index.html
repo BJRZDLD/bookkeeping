@@ -12,6 +12,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
@@ -893,119 +894,231 @@ function app() {
     },
 
     // ===== 导出 =====
-    exportExcel() {
+    async exportExcel() {
       const rs = this.getExportRecords();
       if (rs.length === 0) { this.showToast('没有符合条件的记录', false); return; }
 
-      // 按日期排序
+      if (typeof ExcelJS === 'undefined') {
+        this.showToast('⚠️ 样式库加载中，请稍后重试', false); return;
+      }
+
       const sorted = [...rs].sort((a,b) => a.date.localeCompare(b.date));
-      const from = this.exportFrom || sorted[0]?.date || '';
-      const to   = this.exportTo   || sorted[sorted.length-1]?.date || '';
+      const from  = this.exportFrom || sorted[0]?.date || '';
+      const to    = this.exportTo   || sorted[sorted.length-1]?.date || '';
       const title = this.exportTitle || '收支明细';
 
-      // ====== 构建模板格式的工作表数据 ======
-      // 行1：标题（A1:G1合并）
-      // 行2：日期 | 说明 | 人民币(C2:E2合并) | | | 方式(F2) | 备注(G2:G3合并)
-      // 行3：         |      | 借方 | 贷方 | 余额 | 微信/支付宝
-      // 行4：期初余额（余额为0）
-      // 行5+：数据行   日期 | 分类 | 借方(收入) | 贷方(支出) | =余额公式 | 方式 | 摘要
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('收支明细');
 
-      const ws = {};
-      const R = (r,c) => XLSX.utils.encode_cell({r,c}); // 0-indexed
+      // ===== 列宽（对应模板原始比例）=====
+      ws.columns = [
+        { width: 10.5 }, // A 日期
+        { width: 13.0 }, // B 说明
+        { width: 5.5  }, // C 借方
+        { width: 9.7  }, // D 贷方
+        { width: 12.5 }, // E 余额
+        { width: 13.0 }, // F 方式
+        { width: 16.2 }, // G 备注
+      ];
 
-      // 辅助：设置单元格
-      const set = (addr, v, t='s') => { ws[addr] = { v, t }; };
-      const setN = (addr, v) => { ws[addr] = { v, t:'n', z:'#,##0.00' }; };
+      // ===== 样式定义 =====
+      const SONG = '宋体';
+      const numFmt = '#,##0.00';
 
-      // === 行0 (Row 1): 标题 ===
-      set('A1', title);
+      // 边框辅助
+      const side = (style) => ({ style });
+      const medLeft  = side('medium');
+      const medRight = side('medium');
+      const medTop   = side('medium');
+      const medBot   = side('medium');
+      const thin     = side('thin');
+      const dbl      = side('double');
 
-      // === 行1 (Row 2): 列头 ===
-      set('A2', '日期');
-      set('B2', '说明');
-      set('C2', '人民币');
-      set('F2', '方式');
-      set('G2', '备注');
+      // ===== 行1：标题 =====
+      ws.getRow(1).height = 21;
+      ws.mergeCells('A1:G1');
+      const r1a1 = ws.getCell('A1');
+      r1a1.value = title;
+      r1a1.font = { name: SONG, bold: true, size: 12 };
+      r1a1.alignment = { horizontal: 'center', vertical: 'middle' };
+      r1a1.fill = { type: 'pattern', pattern: 'solid', fgColor: { theme: 3, tint: 0.7999816888943144 } };
+      r1a1.border = { top: thin, bottom: medBot, left: thin, right: thin };
 
-      // === 行2 (Row 3): 子列头 ===
-      set('C3', '借方');
-      set('D3', '贷方');
-      set('E3', '余额');
-      set('F3', '微信/支付宝');
+      // ===== 行2：列头 =====
+      ws.getRow(2).height = 20;
+      ws.mergeCells('A2:A3');
+      ws.mergeCells('B2:B3');
+      ws.mergeCells('C2:E2');
+      ws.mergeCells('G2:G3');
 
-      // === 行3 (Row 4): 期初余额 ===
-      set('A4', '期初');
-      set('B4', '期初余额');
-      setN('E4', 0);
-
-      // === 数据行 ===
-      sorted.forEach((r, i) => {
-        const rowNum = i + 5; // 从第5行开始
-        const rowIdx = rowNum - 1; // 0-indexed
-        const isIncome = r.type === '收入';
-
-        // A: 日期
-        ws[`A${rowNum}`] = { v: r.date, t: 's' };
-        // B: 说明（分类）
-        set(`B${rowNum}`, r.category || r.summary || '');
-        // C: 借方（收入）
-        if (isIncome) {
-          setN(`C${rowNum}`, Number(r.amount));
-        }
-        // D: 贷方（支出）
-        if (!isIncome) {
-          setN(`D${rowNum}`, Number(r.amount));
-        }
-        // E: 余额（公式）
-        const prevE = rowNum === 5 ? 'E4' : `E${rowNum-1}`;
-        ws[`E${rowNum}`] = { f: `${prevE}+IF(ISNUMBER(C${rowNum}),C${rowNum},0)-IF(ISNUMBER(D${rowNum}),D${rowNum},0)`, t:'n', z:'#,##0.00' };
-        // F: 方式（微信/支付宝/手动）
-        set(`F${rowNum}`, r.source || '');
-        // G: 备注/摘要
-        set(`G${rowNum}`, r.summary || r.note || '');
+      const hStyle = (extraBorder) => ({
+        font: { name: SONG, bold: true, size: 12 },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: extraBorder,
       });
 
-      // 计算最后行号（数据行结束后再加汇总）
-      const lastDataRow = sorted.length + 4;
-      const sumRow1 = lastDataRow + 2;
-      const sumRow2 = lastDataRow + 3;
-      const sumRow3 = lastDataRow + 4;
+      // A2 日期
+      const a2 = ws.getCell('A2');
+      a2.value = '日期';
+      a2.font = { name: SONG, bold: true, size: 12 };
+      a2.alignment = { horizontal: 'center', vertical: 'center' };
+      a2.border = { top: medTop, bottom: thin, left: medLeft, right: thin };
 
-      // 汇总行
-      set(`A${sumRow1}`, '汇总');
-      set(`B${sumRow1}`, '总收入');
-      ws[`C${sumRow1}`] = { f: `SUM(C5:C${lastDataRow})`, t:'n', z:'#,##0.00' };
-      set(`B${sumRow2}`, '总支出');
-      ws[`D${sumRow2}`] = { f: `SUM(D5:D${lastDataRow})`, t:'n', z:'#,##0.00' };
-      set(`B${sumRow3}`, '结余');
-      ws[`E${sumRow3}`] = { f: `C${sumRow1}-D${sumRow2}`, t:'n', z:'#,##0.00' };
+      // B2 说明
+      const b2 = ws.getCell('B2');
+      b2.value = '说明';
+      b2.font = { name: SONG, bold: true, size: 12 };
+      b2.alignment = { horizontal: 'center', vertical: 'center' };
+      b2.border = { top: medTop, bottom: thin, left: thin, right: thin };
 
-      // === 合并单元格（模板格式） ===
-      ws['!merges'] = [
-        { s:{r:0,c:0}, e:{r:0,c:6} },   // A1:G1 标题
-        { s:{r:1,c:0}, e:{r:2,c:0} },   // A2:A3 日期
-        { s:{r:1,c:1}, e:{r:2,c:1} },   // B2:B3 说明
-        { s:{r:1,c:2}, e:{r:1,c:4} },   // C2:E2 人民币
-        { s:{r:1,c:6}, e:{r:2,c:6} },   // G2:G3 备注
-      ];
+      // C2 人民币（合并C2:E2，字号16）
+      const c2 = ws.getCell('C2');
+      c2.value = '人民币';
+      c2.font = { name: SONG, bold: true, size: 16 };
+      c2.alignment = { horizontal: 'center', vertical: 'center' };
+      c2.border = { top: medTop, bottom: thin, left: medLeft, right: thin };
 
-      // === 列宽（对应模板） ===
-      ws['!cols'] = [
-        {wpx: 79},  // A 日期
-        {wpx: 98},  // B 说明
-        {wpx: 41},  // C 借方
-        {wpx: 73},  // D 贷方
-        {wpx: 94},  // E 余额
-        {wpx: 98},  // F 方式
-        {wpx: 122}, // G 备注
-      ];
+      // F2 方式（字号16）
+      const f2 = ws.getCell('F2');
+      f2.value = '方式';
+      f2.font = { name: SONG, bold: true, size: 16 };
+      f2.alignment = { horizontal: 'center', vertical: 'center' };
+      f2.border = { top: medTop, bottom: thin, left: medLeft, right: thin };
 
-      // === 范围 ===
-      ws['!ref'] = `A1:G${sumRow3}`;
+      // G2 备注（合并G2:G3）
+      const g2 = ws.getCell('G2');
+      g2.value = '备注';
+      g2.font = { name: SONG, bold: true, size: 12 };
+      g2.alignment = { horizontal: 'center', vertical: 'center' };
+      g2.border = { top: medTop, bottom: thin, left: thin, right: medRight };
 
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, '收支明细');
-      XLSX.writeFile(wb, `账单_${from}_${to}.xlsx`);
+      // ===== 行3：子列头 =====
+      ws.getRow(3).height = 17;
+
+      const subStyle = (leftBorder, rightBorder) => ({
+        font: { name: SONG, size: 12 },
+        alignment: { horizontal: 'center' },
+        border: { top: thin, bottom: dbl, left: leftBorder, right: rightBorder },
+      });
+
+      const c3 = ws.getCell('C3');
+      c3.value = '借方'; Object.assign(c3, subStyle(medLeft, thin));
+      c3.font = { name: SONG, size: 12 }; c3.alignment = { horizontal: 'center' };
+      c3.border = { top: thin, bottom: dbl, left: medLeft, right: thin };
+
+      const d3 = ws.getCell('D3');
+      d3.value = '贷方';
+      d3.font = { name: SONG, size: 12 }; d3.alignment = { horizontal: 'center' };
+      d3.border = { top: thin, bottom: dbl, left: thin, right: thin };
+
+      const e3 = ws.getCell('E3');
+      e3.value = '余额';
+      e3.font = { name: SONG, size: 12 }; e3.alignment = { horizontal: 'center' };
+      e3.border = { top: thin, bottom: dbl, left: thin, right: medRight };
+
+      const f3 = ws.getCell('F3');
+      f3.value = '微信/支付宝';
+      f3.font = { name: SONG, size: 12 }; f3.alignment = { horizontal: 'center' };
+      f3.border = { top: thin, bottom: dbl };
+
+      // ===== 行4：期初余额 =====
+      ws.getRow(4).height = 17;
+      const dataBorder = (isFirst, isLast) => ({
+        top: isFirst ? thin : null,
+        bottom: thin,
+        left: medLeft,
+        right: medRight,
+      });
+      const setDataCell = (row, col, val, numFormat) => {
+        const c = ws.getCell(row, col);
+        c.value = val;
+        c.font = { name: SONG, size: 12 };
+        // 左右边框按列
+        const leftB  = col === 1 ? medLeft : thin;
+        const rightB = col === 7 ? medRight : thin;
+        c.border = { bottom: thin, left: leftB, right: rightB };
+        if (numFormat) c.numFmt = numFormat;
+        return c;
+      };
+
+      setDataCell(4, 1, '期初');
+      setDataCell(4, 2, '期初余额');
+      const e4 = setDataCell(4, 5, 0, numFmt);
+
+      // ===== 数据行 =====
+      const dataStartRow = 5;
+      sorted.forEach((r, i) => {
+        const rowNum = dataStartRow + i;
+        ws.getRow(rowNum).height = 16;
+        const isIncome = r.type === '收入';
+
+        setDataCell(rowNum, 1, r.date);
+        setDataCell(rowNum, 2, r.category || r.summary || '');
+        if (isIncome) {
+          const c = setDataCell(rowNum, 3, Number(r.amount), numFmt);
+        } else {
+          setDataCell(rowNum, 3, null);
+        }
+        if (!isIncome) {
+          setDataCell(rowNum, 4, Number(r.amount), numFmt);
+        } else {
+          setDataCell(rowNum, 4, null);
+        }
+        // 余额：公式
+        const prevRow = rowNum === dataStartRow ? 4 : rowNum - 1;
+        const eCell = setDataCell(rowNum, 5, null, numFmt);
+        eCell.value = { formula: `E${prevRow}+IF(ISNUMBER(C${rowNum}),C${rowNum},0)-IF(ISNUMBER(D${rowNum}),D${rowNum},0)` };
+        eCell.border = { bottom: thin, left: thin, right: medRight };
+
+        setDataCell(rowNum, 6, r.source || '');
+        setDataCell(rowNum, 7, r.summary || r.note || '');
+      });
+
+      // ===== 汇总行（浅蓝色填充）=====
+      const lastDataRow = dataStartRow + sorted.length - 1;
+      const sumRow = lastDataRow + 2;
+      ws.getRow(sumRow).height = 16;
+
+      const sumFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBDD7EE' } }; // 浅蓝色
+      const sumBorder = { top: thin, bottom: thin, left: medLeft, right: medRight };
+
+      ['A','B','C','D','E','F','G'].forEach((col, ci) => {
+        const cell = ws.getCell(`${col}${sumRow}`);
+        cell.fill = sumFill;
+        cell.font = { name: SONG, bold: true, size: 12 };
+        cell.border = {
+          top: thin, bottom: medBot,
+          left: ci === 0 ? medLeft : thin,
+          right: ci === 6 ? medRight : thin
+        };
+      });
+
+      const sA = ws.getCell(`A${sumRow}`); sA.value = '汇总';
+      sA.alignment = { horizontal: 'center' };
+
+      const sC = ws.getCell(`C${sumRow}`);
+      sC.value = { formula: `SUM(C${dataStartRow}:C${lastDataRow})` };
+      sC.numFmt = numFmt;
+
+      ws.getCell(`B${sumRow}`).value = '总收入';
+
+      const sD = ws.getCell(`D${sumRow}`);
+      sD.value = { formula: `SUM(D${dataStartRow}:D${lastDataRow})` };
+      sD.numFmt = numFmt;
+
+      const sE = ws.getCell(`E${sumRow}`);
+      sE.value = { formula: `C${sumRow}-D${sumRow}` };
+      sE.numFmt = numFmt;
+
+      // ===== 生成并下载 =====
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `账单_${from}_${to}.xlsx`;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
       this.showToast(`✅ 已导出 ${sorted.length} 条记录`);
     },
 
